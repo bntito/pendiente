@@ -1,0 +1,3 @@
+node app.js BTC USDT 140
+
+117,279
