@@ -17,6 +17,66 @@ const DEFAULT_BUY_AMOUNT = parseFloat(process.argv[4])
 let BUY_ORDER_AMOUNT = DEFAULT_BUY_AMOUNT;
 const store = new Storage(`./data/${MARKET}.json`)
 
+const requiredVars = [
+    'POSITIVE_BUY_PERCENT', 'POSITIVE_SELL_PERCENT',
+    'NEGATIVE_BUY_PERCENT', 'NEGATIVE_SELL_PERCENT',
+    'NEUTRAL_BUY_PERCENT',  'NEUTRAL_SELL_PERCENT'
+];
+
+for (const key of requiredVars) {
+    if (!process.env[key] || isNaN(parseFloat(process.env[key]))) {
+        throw new Error(`La variable ${key} no está definida correctamente en .env`);
+    }
+}
+
+async function calcularPendienteDesdeVelas(symbol) {
+    const candles = await client.candles({
+        symbol,
+        interval: '1m',
+        limit: 10, // últimos 10 minutos
+    });
+
+    if (candles.length < 2) return 0;
+
+    const x1 = candles[0].openTime;
+    const x2 = candles[candles.length - 1].closeTime;
+    const y1 = parseFloat(candles[0].close);
+    const y2 = parseFloat(candles[candles.length - 1].close);
+
+    return (y2 - y1) / (x2 - x1); // pendiente cruda
+}
+
+function ajustarParametrosSegunPendiente(pendiente) {
+    const pNorm = pendiente * 1e7;
+
+    const posBuy  = parseFloat(process.env.POSITIVE_BUY_PERCENT);
+    const posSell = parseFloat(process.env.POSITIVE_SELL_PERCENT);
+    const negBuy  = parseFloat(process.env.NEGATIVE_BUY_PERCENT);
+    const negSell = parseFloat(process.env.NEGATIVE_SELL_PERCENT);
+    const neutBuy = parseFloat(process.env.NEUTRAL_BUY_PERCENT);
+    const neutSell= parseFloat(process.env.NEUTRAL_SELL_PERCENT);
+
+    if (pNorm > 0.01) {
+        process.env.BUY_PERCENT  = posBuy;
+        process.env.SELL_PERCENT = posSell;
+        logColor(colors.cyan,
+            `↑ Tendencia positiva (pend=${pNorm.toFixed(6)}) ➜ BUY ${posBuy}% | SELL ${posSell}%`
+        );
+    } else if (pNorm < -0.01) {
+        process.env.BUY_PERCENT  = negBuy;
+        process.env.SELL_PERCENT = negSell;
+        logColor(colors.cyan,
+            `↓ Tendencia negativa (pend=${pNorm.toFixed(6)}) ➜ BUY ${negBuy}% | SELL ${negSell}%`
+        );
+    } else {
+        process.env.BUY_PERCENT  = neutBuy;
+        process.env.SELL_PERCENT = neutSell;
+        logColor(colors.cyan,
+            `→ Tendencia lateral (pend=${pNorm.toFixed(6)}) ➜ BUY ${neutBuy}% | SELL ${neutSell}%`
+        );
+    }
+}
+
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 async function ajustarBuyOrderAmount() {
     const balances = await getBalances();
@@ -33,7 +93,6 @@ async function ajustarBuyOrderAmount() {
     logColor(colors.gray, `BUY_ORDER_AMOUNT ajustado automáticamente a ${buyAmount} ${MARKET2}`);
     return buyAmount;
 }
-
 
 /* Cálculo de tiempo transcurrido */
 function elapsedTime() {
@@ -342,6 +401,9 @@ async function broadcast() {
         try {
             const mPrice = await getPrice(MARKET);
             if (mPrice) {
+                const pendiente = await calcularPendienteDesdeVelas(MARKET);
+                ajustarParametrosSegunPendiente(pendiente);
+
                 const startPrice = store.get('start_price');
                 const marketPrice = mPrice;
 
