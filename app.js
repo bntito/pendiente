@@ -36,6 +36,8 @@ async function calcularPendienteDesdeVelas(symbol) {
         limit: 10, // últimos 10 minutos
     });
 
+    // console.log('DEBUG: Velas recibidas:', candles.map(c => c.close));
+
     if (candles.length < 2) return 0;
 
     const x1 = candles[0].openTime;
@@ -56,6 +58,10 @@ function ajustarParametrosSegunPendiente(pendiente) {
     const neutBuy = parseFloat(process.env.NEUTRAL_BUY_PERCENT);
     const neutSell= parseFloat(process.env.NEUTRAL_SELL_PERCENT);
 
+    logColor(colors.gray, `************************************************************`);
+    logColor(colors.blue, `*************** EL BOT DE TRADING DE BRUNO T ***************`);
+    logColor(colors.gray, `************************************************************`);
+
     if (pNorm > 0.01) {
         process.env.BUY_PERCENT  = posBuy;
         process.env.SELL_PERCENT = posSell;
@@ -74,6 +80,25 @@ function ajustarParametrosSegunPendiente(pendiente) {
         logColor(colors.cyan,
             `→ Tendencia lateral (pend=${pNorm.toFixed(6)}) ➜ BUY ${neutBuy}% | SELL ${neutSell}%`
         );
+    }
+
+    // 🔄 Actualizar precio de venta de la última orden si existe
+    const orders = store.get('orders') || [];
+
+    if (orders.length > 0) {
+        const orden = orders[orders.length - 1];
+
+        // Solo si la orden fue comprada y aún no se vendió
+        if ((orden.status === 'pending' || orden.status === 'bought') && orden.buy_price > 0) {
+            const nuevoSellPrice = orden.buy_price * (1 + parseFloat(process.env.SELL_PERCENT) / 100);
+            
+            // Solo si cambia significativamente (opcional)
+            if (!orden.sell_price || Math.abs(nuevoSellPrice - orden.sell_price) > orden.buy_price * 0.001) {
+                orden.sell_price = parseFloat(nuevoSellPrice.toFixed(6));
+                store.put('orders', orders); // guardar el array actualizado
+                logColor(colors.yellow, `Precio de venta actualizado a ${orden.sell_price}`);
+            }
+        }
     }
 }
 
@@ -157,9 +182,9 @@ function _logProfits(price) {
 
     const initialBalance = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`))
 
-    logColor(colors.gray,
+    logColor(colors.yellow,
         `Saldos actuales: ${m1Balance} ${MARKET1}, ${m2Balance.toFixed(2)} ${MARKET2}`)
-    logColor(colors.gray,
+    logColor(colors.yellow,
         `Saldo en función del precio actual: ${parseFloat(m1Balance * price + m2Balance).toFixed(2)} ${MARKET2}, Saldo inicial: ${initialBalance.toFixed(2)} ${MARKET2}`)
 }
 
@@ -206,6 +231,8 @@ async function _buy(price, amount) {
             order.buy_price = parseFloat(res.fills[0].price)
 
             orders.push(order)
+            store.put('orders', orders)
+
             store.put('start_price', order.buy_price)
             await _updateBalances()
 
@@ -407,7 +434,8 @@ async function broadcast() {
                 const startPrice = store.get('start_price');
                 const marketPrice = mPrice;
 
-                console.clear();
+                // console.clear();
+                
                 log(`Tiempo de ejecución: ${elapsedTime()}`);
                 log('===========================================================');
                 const totalProfits = getRealProfits(marketPrice);
@@ -477,7 +505,9 @@ async function broadcast() {
                 await _sell(marketPrice);
                 /* ... resto de la impresión de órdenes ... */
             }
-        } catch (err) { }
+        } catch (err) { 
+            console.error('ERROR en broadcast():', err);
+        }
         await sleep(process.env.SLEEP_TIME);
     }
 }
